@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { CartProvider } from './contexts/CartContext';
 import { Navbar } from './components/Navbar';
 import { Auth } from './components/Auth';
 import { SearchPage } from './pages/SearchPage';
 import { CreateListingPage } from './pages/CreateListingPage';
+import { CartPage } from './pages/CartPage';
 import { ProfilePage } from './pages/ProfilePage';
 
 function AppContent() {
@@ -30,6 +32,7 @@ function AppContent() {
       <Navbar currentPage={currentPage} onNavigate={setCurrentPage} />
       {currentPage === 'search' && <SearchPage />}
       {currentPage === 'create' && <CreateListingPage />}
+      {currentPage === 'cart' && <CartPage onNavigate={setCurrentPage} />}
       {currentPage === 'profile' && <ProfilePage />}
     </div>
   );
@@ -38,7 +41,9 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <CartProvider>
+        <AppContent />
+      </CartProvider>
     </AuthProvider>
   );
 }

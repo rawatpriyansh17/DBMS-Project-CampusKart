@@ -1,4 +1,6 @@
-import { X, MapPin, User, Phone, Calendar } from 'lucide-react';
+import * as React from 'react';
+import { X, MapPin, User, Phone, Calendar, ShoppingCart } from 'lucide-react';
+import { useCart } from '../contexts/CartContext';
 import type { ListingWithProfile } from '../lib/database.types';
 
 interface ListingModalProps {
@@ -7,12 +9,29 @@ interface ListingModalProps {
 }
 
 export function ListingModal({ listing, onClose }: ListingModalProps) {
+  const { addToCart } = useCart();
+  const [isAdding, setIsAdding] = React.useState(false);
+  const [addedMessage, setAddedMessage] = React.useState(false);
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
     });
+  };
+
+  const handleAddToCart = async () => {
+    try {
+      setIsAdding(true);
+      await addToCart(listing.id);
+      setAddedMessage(true);
+      setTimeout(() => setAddedMessage(false), 2000);
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+    } finally {
+      setIsAdding(false);
+    }
   };
 
   return (
@@ -60,7 +79,7 @@ export function ListingModal({ listing, onClose }: ListingModalProps) {
             <p className="text-gray-700 leading-relaxed">{listing.description}</p>
           </div>
 
-          <div className="border-t border-gray-200 pt-6">
+          <div className="border-t border-gray-200 pt-6 mb-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Seller Information</h3>
             <div className="space-y-3">
               <div className="flex items-center text-gray-700">
@@ -82,6 +101,22 @@ export function ListingModal({ listing, onClose }: ListingModalProps) {
                 <span>Posted on {formatDate(listing.created_at)}</span>
               </div>
             </div>
+          </div>
+
+          <div className="flex gap-3">
+            {addedMessage && (
+              <div className="flex-1 py-3 px-4 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-green-800 font-medium">Added to cart!</p>
+              </div>
+            )}
+            <button
+              onClick={handleAddToCart}
+              disabled={isAdding}
+              className="flex-1 flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50"
+            >
+              <ShoppingCart size={20} />
+              <span>{isAdding ? 'Adding...' : 'Add to Cart'}</span>
+            </button>
           </div>
         </div>
       </div>

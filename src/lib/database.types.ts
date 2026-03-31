@@ -69,12 +69,41 @@ export interface Database {
           updated_at?: string;
         };
       };
+      carts: {
+        Row: {
+          id: string;
+          user_id: string;
+          listing_id: string;
+          quantity: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          listing_id: string;
+          quantity?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          listing_id?: string;
+          quantity?: number;
+          updated_at?: string;
+        };
+      };
     };
   };
 }
 
 export type Profile = Database['public']['Tables']['profiles']['Row'];
 export type Listing = Database['public']['Tables']['listings']['Row'];
+export type CartItem = Database['public']['Tables']['carts']['Row'];
+export type CartItemWithListing = CartItem & {
+  listings: Listing;
+};
 export type ListingWithProfile = Listing & {
   profiles: Profile;
 };
