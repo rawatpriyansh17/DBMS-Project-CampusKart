@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   updated_at timestamptz DEFAULT now()
 );
 
--- Create listings table
+-- Create listings or products table
 CREATE TABLE IF NOT EXISTS listings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
