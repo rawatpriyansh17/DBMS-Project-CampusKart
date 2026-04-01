@@ -6,6 +6,7 @@ import { Auth } from './components/Auth';
 import { SearchPage } from './pages/SearchPage';
 import { CreateListingPage } from './pages/CreateListingPage';
 import { CartPage } from './pages/CartPage';
+import { OrderHistoryPage } from './pages/OrderHistoryPage';
 import { ProfilePage } from './pages/ProfilePage';
 
 function AppContent() {
@@ -33,6 +34,7 @@ function AppContent() {
       {currentPage === 'search' && <SearchPage />}
       {currentPage === 'create' && <CreateListingPage />}
       {currentPage === 'cart' && <CartPage onNavigate={setCurrentPage} />}
+      {currentPage === 'orders' && <OrderHistoryPage />}
       {currentPage === 'profile' && <ProfilePage />}
     </div>
   );

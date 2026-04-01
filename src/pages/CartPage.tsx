@@ -1,21 +1,58 @@
 import { useState } from 'react';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
 import { Trash2, Minus, Plus, ShoppingCart, ArrowLeft, CheckCircle } from 'lucide-react';
 
 export function CartPage({ onNavigate }: { onNavigate: (page: string) => void }) {
+  const { user } = useAuth();
   const { cartItems, cartTotal, updateQuantity, removeFromCart, clearCart, loading } = useCart();
   const [showCheckoutSuccess, setShowCheckoutSuccess] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const handleCheckout = async () => {
+    if (!user) return;
+
+    setIsProcessing(true);
     try {
+      const { data: order, error: orderError } = await supabase
+        .from('orders')
+        .insert({
+          user_id: user.id,
+          total_amount: cartTotal,
+          status: 'completed',
+          payment_method: 'direct',
+        })
+        .select()
+        .maybeSingle();
+
+      if (orderError || !order) throw orderError;
+
+      const orderItemsData = cartItems.map((item) => ({
+        order_id: order.id,
+        listing_id: item.listing_id,
+        quantity: item.quantity,
+        unit_price: item.listings.price,
+        total_price: item.listings.price * item.quantity,
+      }));
+
+      const { error: itemsError } = await supabase
+        .from('order_items')
+        .insert(orderItemsData);
+
+      if (itemsError) throw itemsError;
+
       await clearCart();
       setShowCheckoutSuccess(true);
       setTimeout(() => {
         setShowCheckoutSuccess(false);
-        onNavigate('search');
+        onNavigate('orders');
       }, 3000);
     } catch (error) {
       console.error('Error during checkout:', error);
+      alert('Checkout failed. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -182,9 +219,17 @@ export function CartPage({ onNavigate }: { onNavigate: (page: string) => void })
 
                 <button
                   onClick={handleCheckout}
-                  className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors mb-3"
+                  disabled={isProcessing}
+                  className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors mb-3 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  Proceed to Checkout
+                  {isProcessing ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      <span>Processing...</span>
+                    </>
+                  ) : (
+                    'Proceed to Checkout'
+                  )}
                 </button>
 
                 <button
