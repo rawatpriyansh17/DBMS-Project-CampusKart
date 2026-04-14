@@ -1,4 +1,6 @@
+// @ts-nocheck
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,10 +10,36 @@ const corsHeaders = {
 
 interface RequestBody {
   message: string;
+  history?: Array<{
+    role: "user" | "assistant";
+    content: string;
+  }>;
 }
 
 interface ChatResponse {
   reply: string;
+}
+
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+}
+
+const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? Deno.env.get("VITE_SUPABASE_URL");
+const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("VITE_SUPABASE_ANON_KEY");
+const geminiApiKey = Deno.env.get("GEMINI_API_KEY") ?? Deno.env.get("GOOGLE_API_KEY");
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error("Missing Supabase environment variables for chat function.");
+}
+
+if (!geminiApiKey) {
+  throw new Error("Missing GEMINI_API_KEY for chat function.");
 }
 
 Deno.serve(async (req: Request) => {
@@ -23,7 +51,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { message }: RequestBody = await req.json();
+    const { message, history = [] }: RequestBody = await req.json();
 
     if (!message || typeof message !== "string") {
       return new Response(
@@ -40,10 +68,153 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const reply = generateResponse(message.toLowerCase());
+    const authHeader = req.headers.get("Authorization") ?? "";
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: authHeader,
+          apikey: supabaseAnonKey,
+        },
+      },
+    });
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return new Response(
+        JSON.stringify({
+          reply: "Please sign in again to use the assistant.",
+        }),
+        {
+          status: 401,
+          headers: {
+            ...corsHeaders,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    }
+
+    const [profileResult, listingsResult, cartResult, ordersResult] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("full_name, location")
+        .eq("id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("listings")
+        .select("title, price, category, condition, location, status, created_at")
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(12),
+      supabase
+        .from("carts")
+        .select("quantity")
+        .eq("user_id", user.id),
+      supabase
+        .from("orders")
+        .select("total_amount, status, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(5),
+    ]);
+
+    const activeListings = listingsResult.data ?? [];
+    const categorySummary = activeListings.reduce<Record<string, number>>((acc, item) => {
+      acc[item.category] = (acc[item.category] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const userCartItems = cartResult.data ?? [];
+    const userOrders = ordersResult.data ?? [];
+
+    const marketplaceContext = {
+      user: {
+        id: user.id,
+        full_name: profileResult.data?.full_name ?? null,
+        location: profileResult.data?.location ?? null,
+        cart_items_count: userCartItems.reduce((sum, row) => sum + row.quantity, 0),
+        recent_orders_count: userOrders.length,
+      },
+      listings: {
+        active_count: activeListings.length,
+        categories: categorySummary,
+        latest: activeListings.slice(0, 8),
+      },
+      recent_orders: userOrders,
+      warnings: [
+        profileResult.error?.message,
+        listingsResult.error?.message,
+        cartResult.error?.message,
+        ordersResult.error?.message,
+      ].filter(Boolean),
+    };
+
+    const recentConversation = history
+      .slice(-8)
+      .map((item) => `${item.role}: ${item.content}`)
+      .join("\n");
+
+    const prompt = `You are CampusKart assistant for a college marketplace.
+
+Use the database context below to answer accurately. Mention specific categories and current marketplace availability when useful.
+If user asks for data that is not in the context, say you do not have enough data.
+Keep responses concise, practical, and student-friendly.
+
+DATABASE CONTEXT (JSON):
+${JSON.stringify(marketplaceContext)}
+
+RECENT CHAT HISTORY:
+${recentConversation || "(no prior context)"}
+
+USER MESSAGE:
+${message}`;
+
+    const geminiRes = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-goog-api-key": geminiApiKey,
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.35,
+            maxOutputTokens: 500,
+          },
+        }),
+      },
+    );
+
+    if (!geminiRes.ok) {
+      const rawError = await geminiRes.text();
+      console.error("Gemini API error", rawError);
+      throw new Error(`Gemini request failed with status ${geminiRes.status}`);
+    }
+
+    const geminiData = (await geminiRes.json()) as GeminiResponse;
+    const reply = geminiData.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text ?? "")
+      .join("\n")
+      .trim();
+
+    const finalReply =
+      reply && reply.length > 0
+        ? reply
+        : "I could not generate a response right now. Please try asking again.";
 
     const response: ChatResponse = {
-      reply,
+      reply: finalReply,
     };
 
     return new Response(JSON.stringify(response), {
@@ -70,110 +241,3 @@ Deno.serve(async (req: Request) => {
     );
   }
 });
-
-function generateResponse(message: string): string {
-  const lowerMessage = message.toLowerCase();
-
-  // Greeting responses
-  if (
-    lowerMessage.includes("hello") ||
-    lowerMessage.includes("hi") ||
-    lowerMessage.includes("hey")
-  ) {
-    return "Hello! 👋 Welcome to CampusKart. How can I help you today? You can ask me about browsing items, creating listings, managing your cart, or using any features.";
-  }
-
-  // Browse/Search related
-  if (
-    lowerMessage.includes("browse") ||
-    lowerMessage.includes("search") ||
-    lowerMessage.includes("find items")
-  ) {
-    return "Great question! To browse items, click the 'Browse' button in the navigation bar. You can search by keyword, filter by category (Electronics, Books, Furniture, etc.), condition (New, Like New, Good, Fair), and price range. Just type in the search box and adjust the filters to find exactly what you're looking for!";
-  }
-
-  // Selling/Creating listings
-  if (
-    lowerMessage.includes("sell") ||
-    lowerMessage.includes("create listing") ||
-    lowerMessage.includes("post item")
-  ) {
-    return "Ready to sell? Click the 'Sell' button in the navigation. Fill in the item details:\n• Title and description\n• Price and category\n• Condition and your location\n• Add an image URL (optional)\nYour listing will be live immediately and visible to all students!";
-  }
-
-  // Cart related
-  if (
-    lowerMessage.includes("cart") ||
-    lowerMessage.includes("add to cart") ||
-    lowerMessage.includes("checkout")
-  ) {
-    return "You can add items to your cart by viewing a product and clicking 'Add to Cart'. View your cart by clicking the cart icon in the nav bar. Adjust quantities, remove items, and when ready, click 'Proceed to Checkout'. Your order will be created and you can view it in your Order History!";
-  }
-
-  // Order history
-  if (
-    lowerMessage.includes("order") ||
-    lowerMessage.includes("history") ||
-    lowerMessage.includes("purchase")
-  ) {
-    return "Click the 'Orders' button in the navigation to view your complete order history. You can see all your past purchases with details like order dates, items, quantities, and totals. Each order shows exactly what you bought and when!";
-  }
-
-  // Profile management
-  if (
-    lowerMessage.includes("profile") ||
-    lowerMessage.includes("edit profile") ||
-    lowerMessage.includes("account")
-  ) {
-    return "Visit your Profile page by clicking the profile icon in the nav. Here you can:\n• Edit your full name and location\n• Add/update your phone number\n• View all your listings\n• See your order history\nJust click 'Edit' to modify your information!";
-  }
-
-  // Categories
-  if (lowerMessage.includes("categor")) {
-    return "We have the following categories:\n• Electronics (phones, laptops, etc.)\n• Books (textbooks, novels, etc.)\n• Furniture (desks, chairs, etc.)\n• Clothing (apparel, accessories)\n• Sports (equipment, gear)\n• Other (miscellaneous items)\nUse filters to browse by category!";
-  }
-
-  // Pricing questions
-  if (
-    lowerMessage.includes("price") ||
-    lowerMessage.includes("cost") ||
-    lowerMessage.includes("how much")
-  ) {
-    return "Prices are set by individual sellers on CampusKart. You can filter items by price range in the search page. Items can be anything from free to any price the seller sets. Use the Min/Max price filters to find items in your budget!";
-  }
-
-  // Location related
-  if (
-    lowerMessage.includes("location") ||
-    lowerMessage.includes("meeting") ||
-    lowerMessage.includes("pickup")
-  ) {
-    return "Each item listing shows the seller's location on campus. When you're interested in an item, you can see where the seller is located. The specific meeting/pickup arrangements are usually made directly between buyer and seller through contact info!";
-  }
-
-  // Payment
-  if (
-    lowerMessage.includes("payment") ||
-    lowerMessage.includes("pay") ||
-    lowerMessage.includes("money")
-  ) {
-    return "CampusKart currently supports direct transactions. When you checkout, your order is recorded in your Order History. Payment arrangements between buyer and seller are typically handled directly (cash, Venmo, etc.). Always meet in safe, public locations on campus!";
-  }
-
-  // Help with features
-  if (lowerMessage.includes("how do i") || lowerMessage.includes("how to")) {
-    return "I can help you with:\n• Searching and browsing items\n• Creating and managing listings\n• Using the shopping cart\n• Checking orders and history\n• Managing your profile\n\nJust ask me about any of these features!";
-  }
-
-  // General help
-  if (
-    lowerMessage.includes("help") ||
-    lowerMessage.includes("support") ||
-    lowerMessage.includes("what can you do")
-  ) {
-    return "I'm your CampusKart assistant! I can help you with:\n✓ Browsing and searching for items\n✓ Creating and posting listings\n✓ Managing your shopping cart\n✓ Viewing order history\n✓ Profile management\n✓ General platform questions\n\nWhat would you like to know?";
-  }
-
-  // Default response
-  return "That's a great question! I'm here to help with CampusKart features like browsing, selling, shopping, and managing your account. Feel free to ask me anything specific about how to use the platform!";
-}

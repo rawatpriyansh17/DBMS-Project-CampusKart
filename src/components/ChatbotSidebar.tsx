@@ -1,11 +1,183 @@
 import { useState, useRef, useEffect } from 'react';
 import { MessageCircle, Send, X, Minimize2, Maximize2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 interface Message {
   id: string;
   type: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+}
+
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+}
+
+interface ProfileSummary {
+  full_name: string | null;
+  location: string | null;
+}
+
+interface ListingSummary {
+  title: string;
+  price: number;
+  category: string;
+  condition: string;
+  location: string;
+  status: string;
+  created_at: string;
+}
+
+interface CartSummary {
+  quantity: number;
+}
+
+interface OrderSummary {
+  total_amount: number;
+  status: string;
+  created_at: string;
+}
+
+const LEGACY_REPLY_SIGNATURE =
+  "That's a great question! I'm here to help with CampusKart features";
+
+const isLegacyCloudReply = (reply: string) =>
+  reply.includes(LEGACY_REPLY_SIGNATURE);
+
+async function getMarketplaceContextForPrompt() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error('User is not signed in');
+  }
+
+  const [profileResult, listingsResult, cartResult, ordersResult] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('full_name, location')
+      .eq('id', user.id)
+      .maybeSingle(),
+    supabase
+      .from('listings')
+      .select('title, price, category, condition, location, status, created_at')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(12),
+    supabase.from('carts').select('quantity').eq('user_id', user.id),
+    supabase
+      .from('orders')
+      .select('total_amount, status, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(5),
+  ]);
+
+  const profileData = (profileResult.data as ProfileSummary | null) ?? null;
+  const activeListings = (listingsResult.data as ListingSummary[] | null) ?? [];
+  const cartItems = (cartResult.data as CartSummary[] | null) ?? [];
+  const userOrders = (ordersResult.data as OrderSummary[] | null) ?? [];
+
+  const categorySummary = activeListings.reduce<Record<string, number>>((acc, listing) => {
+    acc[listing.category] = (acc[listing.category] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return {
+    user: {
+      id: user.id,
+      full_name: profileData?.full_name ?? null,
+      location: profileData?.location ?? null,
+      cart_items_count: cartItems.reduce((sum, row) => sum + row.quantity, 0),
+      recent_orders_count: userOrders.length,
+    },
+    listings: {
+      active_count: activeListings.length,
+      categories: categorySummary,
+      latest: activeListings.slice(0, 8),
+    },
+    recent_orders: userOrders,
+    warnings: [
+      profileResult.error?.message,
+      listingsResult.error?.message,
+      cartResult.error?.message,
+      ordersResult.error?.message,
+    ].filter(Boolean),
+  };
+}
+
+async function getGeminiReplyFromBrowser(
+  message: string,
+  history: Array<{ role: 'user' | 'assistant'; content: string }>
+) {
+  const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+  if (!geminiApiKey) {
+    throw new Error('Missing VITE_GEMINI_API_KEY for frontend Gemini fallback.');
+  }
+
+  const marketplaceContext = await getMarketplaceContextForPrompt();
+  const recentConversation = history
+    .slice(-8)
+    .map((item) => `${item.role}: ${item.content}`)
+    .join('\n');
+
+  const prompt = `You are CampusKart assistant for a college marketplace.
+
+Use the database context below to answer accurately.
+If user asks for data that is not in the context, say you do not have enough data.
+Keep responses concise, practical, and student-friendly.
+
+DATABASE CONTEXT (JSON):
+${JSON.stringify(marketplaceContext)}
+
+RECENT CHAT HISTORY:
+${recentConversation || '(no prior context)'}
+
+USER MESSAGE:
+${message}`;
+
+  const response = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': geminiApiKey,
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.35,
+          maxOutputTokens: 500,
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const rawError = await response.text();
+    throw new Error(`Gemini fallback failed (${response.status}): ${rawError}`);
+  }
+
+  const data = (await response.json()) as GeminiResponse;
+  const reply = data.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text ?? '')
+    .join('\n')
+    .trim();
+
+  if (!reply) {
+    throw new Error('Gemini returned an empty response.');
+  }
+
+  return reply;
 }
 
 export function ChatbotSidebar() {
@@ -46,31 +218,37 @@ export function ChatbotSidebar() {
     setInputValue('');
     setLoading(true);
 
-    try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({
-            message: userMessage.content,
-          }),
-        }
-      );
+    const history = [...messages, userMessage]
+      .slice(-8)
+      .map((message) => ({
+        role: message.type,
+        content: message.content,
+      }));
 
-      if (!response.ok) {
-        throw new Error('Failed to get response');
+    try {
+      let assistantReply = '';
+
+      const { data, error } = await supabase.functions.invoke('chat', {
+        body: {
+          message: userMessage.content,
+          history,
+        },
+      });
+
+      if (error) {
+        throw error;
       }
 
-      const data = await response.json();
+      assistantReply = data?.reply?.trim() ?? '';
+
+      if (!assistantReply || isLegacyCloudReply(assistantReply)) {
+        assistantReply = await getGeminiReplyFromBrowser(userMessage.content, history);
+      }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: data.reply || 'Sorry, I encountered an error. Please try again.',
+        content: assistantReply,
         timestamp: new Date(),
       };
 
@@ -78,15 +256,33 @@ export function ChatbotSidebar() {
     } catch (error) {
       console.error('Chat error:', error);
 
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'assistant',
-        content:
-          'Sorry, I encountered an error connecting to the server. Please try again later.',
-        timestamp: new Date(),
-      };
+      try {
+        const fallbackReply = await getGeminiReplyFromBrowser(
+          userMessage.content,
+          history
+        );
 
-      setMessages((prev) => [...prev, errorMessage]);
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: fallbackReply,
+          timestamp: new Date(),
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
+      } catch (fallbackError) {
+        console.error('Gemini fallback error:', fallbackError);
+
+        const errorMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content:
+            'Chat is using an outdated cloud function and Gemini fallback is unavailable. Add VITE_GEMINI_API_KEY to .env for local fallback, or deploy the updated Supabase chat function.',
+          timestamp: new Date(),
+        };
+
+        setMessages((prev) => [...prev, errorMessage]);
+      }
     } finally {
       setLoading(false);
     }
