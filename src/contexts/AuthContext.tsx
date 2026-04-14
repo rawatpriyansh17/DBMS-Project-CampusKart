@@ -94,6 +94,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: profileError as AuthError };
       }
 
+      await loadProfile(data.user.id);
+      setUser(data.user);
+
       return { error: null };
     } catch (error) {
       return { error: error as AuthError };

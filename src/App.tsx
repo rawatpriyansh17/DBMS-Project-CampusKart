@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { CartProvider } from './contexts/CartContext';
 import { Navbar } from './components/Navbar';
 import { Auth } from './components/Auth';
+import { ChatbotSidebar } from './components/ChatbotSidebar';
 import { SearchPage } from './pages/SearchPage';
 import { CreateListingPage } from './pages/CreateListingPage';
 import { CartPage } from './pages/CartPage';
@@ -36,6 +37,7 @@ function AppContent() {
       {currentPage === 'cart' && <CartPage onNavigate={setCurrentPage} />}
       {currentPage === 'orders' && <OrderHistoryPage />}
       {currentPage === 'profile' && <ProfilePage />}
+      <ChatbotSidebar />
     </div>
   );
 }
