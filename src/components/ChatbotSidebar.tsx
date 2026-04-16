@@ -747,7 +747,7 @@ export function ChatbotSidebar() {
     return (
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-10 right-2 z-40 bg-blue-600 hover:bg-blue-700 text-white rounded-full p-4 shadow-lg transition-all hover:scale-110"
+        className="fixed bottom-14 right-4 z-40 bg-blue-600 hover:bg-blue-700 text-white rounded-full p-4 shadow-lg transition-all hover:scale-110"
         aria-label="Open chat"
       >
         <MessageCircle size={24} />
