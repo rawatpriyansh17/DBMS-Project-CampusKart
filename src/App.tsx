@@ -37,7 +37,7 @@ function AppContent() {
       {currentPage === 'cart' && <CartPage onNavigate={setCurrentPage} />}
       {currentPage === 'orders' && <OrderHistoryPage />}
       {currentPage === 'profile' && <ProfilePage />}
-      <div className="absolute bottom-2 right-0">
+      <div className="absolute bottom-6 right-0">
       <ChatbotSidebar />
         </div>
     </div>
