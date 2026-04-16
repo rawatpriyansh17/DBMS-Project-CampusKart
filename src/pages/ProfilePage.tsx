@@ -3,8 +3,25 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { ListingCard } from '../components/ListingCard';
 import { ListingModal } from '../components/ListingModal';
-import { User, MapPin, Phone, CreditCard as Edit2, Save, Trash2, Package } from 'lucide-react';
-import type { ListingWithProfile, OrderWithItems } from '../lib/database.types';
+import {
+  User,
+  MapPin,
+  Phone,
+  CreditCard as Edit2,
+  Save,
+  Trash2,
+  Package,
+  Pencil,
+  X,
+} from 'lucide-react';
+import type {
+  Database,
+  ListingWithProfile,
+  OrderWithItems,
+} from '../lib/database.types';
+
+const CATEGORIES = ['Electronics', 'Books', 'Furniture', 'Clothing', 'Sports', 'Other'];
+const CONDITIONS = ['New', 'Like New', 'Good', 'Fair'];
 
 export function ProfilePage() {
   const { user, profile, refreshProfile } = useAuth();
@@ -14,10 +31,24 @@ export function ProfilePage() {
   const [activeTab, setActiveTab] = useState<'listings' | 'orders'>('listings');
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
+  const [isEditingListing, setIsEditingListing] = useState(false);
+  const [editingListingId, setEditingListingId] = useState<string | null>(null);
+  const [listingActionLoading, setListingActionLoading] = useState(false);
+  const [listingEditError, setListingEditError] = useState('');
   const [editData, setEditData] = useState({
     full_name: profile?.full_name || '',
     location: profile?.location || '',
     phone: profile?.phone || '',
+  });
+  const [listingEditData, setListingEditData] = useState({
+    title: '',
+    description: '',
+    price: '',
+    category: CATEGORIES[0],
+    condition: CONDITIONS[2],
+    image_url: '',
+    location: '',
+    status: 'active',
   });
 
   useEffect(() => {
@@ -38,6 +69,8 @@ export function ProfilePage() {
   }, [user]);
 
   const fetchUserOrders = async () => {
+    if (!user) return;
+
     try {
       const { data, error } = await supabase
         .from('orders')
@@ -56,7 +89,7 @@ export function ProfilePage() {
             )
           )
         `)
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -67,6 +100,8 @@ export function ProfilePage() {
   };
 
   const fetchUserListings = async () => {
+    if (!user) return;
+
     try {
       const { data, error } = await supabase
         .from('listings')
@@ -74,7 +109,7 @@ export function ProfilePage() {
           *,
           profiles (*)
         `)
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -90,14 +125,16 @@ export function ProfilePage() {
     if (!user) return;
 
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          full_name: editData.full_name,
-          location: editData.location,
-          phone: editData.phone || null,
-          updated_at: new Date().toISOString(),
-        })
+      const profileUpdate: Database['public']['Tables']['profiles']['Update'] = {
+        full_name: editData.full_name,
+        location: editData.location,
+        phone: editData.phone || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await (supabase
+        .from('profiles') as any)
+        .update(profileUpdate)
         .eq('id', user.id);
 
       if (error) throw error;
@@ -124,11 +161,83 @@ export function ProfilePage() {
     }
   };
 
+  const handleStartEditListing = (listing: ListingWithProfile) => {
+    setListingEditError('');
+    setEditingListingId(listing.id);
+    setListingEditData({
+      title: listing.title,
+      description: listing.description,
+      price: listing.price.toString(),
+      category: listing.category,
+      condition: listing.condition,
+      image_url: listing.image_url,
+      location: listing.location,
+      status: listing.status,
+    });
+    setIsEditingListing(true);
+  };
+
+  const handleUpdateListing = async () => {
+    if (!user || !editingListingId) return;
+
+    const parsedPrice = parseFloat(listingEditData.price);
+    if (Number.isNaN(parsedPrice) || parsedPrice < 0) {
+      setListingEditError('Please enter a valid non-negative price.');
+      return;
+    }
+
+    setListingActionLoading(true);
+    setListingEditError('');
+
+    try {
+      const listingUpdate: Database['public']['Tables']['listings']['Update'] = {
+        title: listingEditData.title.trim(),
+        description: listingEditData.description.trim(),
+        price: parsedPrice,
+        category: listingEditData.category,
+        condition: listingEditData.condition,
+        image_url:
+          listingEditData.image_url.trim() ||
+          'https://images.unsplash.com/photo-1556745753-b2904692b3cd?w=800&h=600&fit=crop',
+        location: listingEditData.location.trim(),
+        status: listingEditData.status,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await (supabase
+        .from('listings') as any)
+        .update(listingUpdate)
+        .eq('id', editingListingId)
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      await fetchUserListings();
+
+      if (selectedListing?.id === editingListingId) {
+        setSelectedListing(null);
+      }
+
+      setIsEditingListing(false);
+      setEditingListingId(null);
+    } catch (error) {
+      console.error('Error updating listing:', error);
+      setListingEditError('Failed to update listing. Please try again.');
+    } finally {
+      setListingActionLoading(false);
+    }
+  };
+
   const handleMarkAsSold = async (listingId: string) => {
     try {
-      const { error } = await supabase
-        .from('listings')
-        .update({ status: 'sold', updated_at: new Date().toISOString() })
+      const soldUpdate: Database['public']['Tables']['listings']['Update'] = {
+        status: 'sold',
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await (supabase
+        .from('listings') as any)
+        .update(soldUpdate)
         .eq('id', listingId);
 
       if (error) throw error;
@@ -290,6 +399,17 @@ export function ProfilePage() {
                   <div key={listing.id} className="relative">
                     <ListingCard listing={listing} onClick={() => setSelectedListing(listing)} />
                     <div className="absolute top-4 right-4 flex gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartEditListing(listing);
+                        }}
+                        className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                        aria-label="Edit listing"
+                        title="Edit listing"
+                      >
+                        <Pencil size={16} />
+                      </button>
                       {listing.status === 'active' && (
                         <button
                           onClick={(e) => {
@@ -382,6 +502,170 @@ export function ProfilePage() {
 
       {selectedListing && (
         <ListingModal listing={selectedListing} onClose={() => setSelectedListing(null)} />
+      )}
+
+      {isEditingListing && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <h2 className="text-xl font-bold text-gray-900">Edit Listing</h2>
+              <button
+                onClick={() => {
+                  setIsEditingListing(false);
+                  setEditingListingId(null);
+                  setListingEditError('');
+                }}
+                className="text-gray-500 hover:text-gray-700"
+                aria-label="Close edit listing modal"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                <input
+                  type="text"
+                  value={listingEditData.title}
+                  onChange={(e) =>
+                    setListingEditData({ ...listingEditData, title: e.target.value })
+                  }
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <textarea
+                  value={listingEditData.description}
+                  onChange={(e) =>
+                    setListingEditData({ ...listingEditData, description: e.target.value })
+                  }
+                  rows={4}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Price</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={listingEditData.price}
+                    onChange={(e) =>
+                      setListingEditData({ ...listingEditData, price: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
+                  <input
+                    type="text"
+                    value={listingEditData.location}
+                    onChange={(e) =>
+                      setListingEditData({ ...listingEditData, location: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                  <select
+                    value={listingEditData.category}
+                    onChange={(e) =>
+                      setListingEditData({ ...listingEditData, category: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    {CATEGORIES.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Condition</label>
+                  <select
+                    value={listingEditData.condition}
+                    onChange={(e) =>
+                      setListingEditData({ ...listingEditData, condition: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    {CONDITIONS.map((condition) => (
+                      <option key={condition} value={condition}>
+                        {condition}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                  <select
+                    value={listingEditData.status}
+                    onChange={(e) =>
+                      setListingEditData({ ...listingEditData, status: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="active">Active</option>
+                    <option value="sold">Sold</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
+                <input
+                  type="url"
+                  value={listingEditData.image_url}
+                  onChange={(e) =>
+                    setListingEditData({ ...listingEditData, image_url: e.target.value })
+                  }
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              {listingEditError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  {listingEditError}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3">
+              <button
+                onClick={() => {
+                  setIsEditingListing(false);
+                  setEditingListingId(null);
+                  setListingEditError('');
+                }}
+                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateListing}
+                disabled={listingActionLoading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {listingActionLoading ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
