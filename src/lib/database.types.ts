@@ -7,6 +7,7 @@ export interface Database {
           full_name: string;
           location: string;
           phone: string | null;
+          role: 'user' | 'admin';
           created_at: string;
           updated_at: string;
         };
@@ -15,6 +16,7 @@ export interface Database {
           full_name: string;
           location: string;
           phone?: string | null;
+          role?: 'user' | 'admin';
           created_at?: string;
           updated_at?: string;
         };
@@ -23,6 +25,7 @@ export interface Database {
           full_name?: string;
           location?: string;
           phone?: string | null;
+          role?: 'user' | 'admin';
           updated_at?: string;
         };
       };

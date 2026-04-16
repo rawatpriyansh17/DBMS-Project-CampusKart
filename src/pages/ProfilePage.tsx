@@ -25,6 +25,7 @@ const CONDITIONS = ['New', 'Like New', 'Good', 'Fair'];
 
 export function ProfilePage() {
   const { user, profile, refreshProfile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const [listings, setListings] = useState<ListingWithProfile[]>([]);
   const [selectedListing, setSelectedListing] = useState<ListingWithProfile | null>(null);
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
@@ -270,7 +271,18 @@ export function ProfilePage() {
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">My Profile</h1>
-                <p className="text-gray-600">Manage your account and listings</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-gray-600">Manage your account and listings</p>
+                  <span
+                    className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                      isAdmin
+                        ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                        : 'bg-gray-100 text-gray-700 border border-gray-200'
+                    }`}
+                  >
+                    {isAdmin ? 'Admin' : 'User'}
+                  </span>
+                </div>
               </div>
             </div>
             {!isEditing ? (
@@ -381,6 +393,23 @@ export function ProfilePage() {
               Order History ({orders.length})
             </button>
           </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+          <h3 className="text-sm font-semibold text-gray-900 mb-2">Access Level</h3>
+          {isAdmin ? (
+            <div className="text-sm text-gray-700 space-y-1">
+              <p>Role: Admin</p>
+              <p>Can view and manage all users' marketplace data through RLS admin policies.</p>
+              <p>Can perform all normal user actions (buy, sell, cart, orders, profile updates).</p>
+            </div>
+          ) : (
+            <div className="text-sm text-gray-700 space-y-1">
+              <p>Role: User</p>
+              <p>Can view active listings and fully manage own listings.</p>
+              <p>Can only access own cart, own orders, and own profile data.</p>
+            </div>
+          )}
         </div>
 
         {activeTab === 'listings' ? (
