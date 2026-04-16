@@ -164,6 +164,18 @@ Deno.serve(async (req: Request) => {
 Use the database context below to answer accurately. Mention specific categories and current marketplace availability when useful.
 If user asks for data that is not in the context, say you do not have enough data.
 Keep responses concise, practical, and student-friendly.
+  Output must be plain text only.
+  Do not use markdown formatting symbols like **, *, _, #, or backticks.
+  If listing items, use simple numbered or hyphen lists in plain text.
+  Always complete your answer and end with a full sentence.
+When the user asks for item/listing details, use this style:
+1) Item title
+  - Price: ...
+  - Category: ...
+  - Condition: ...
+  - Location: ...
+  - Description: ... (if available)
+Include every available item from context when user asks for all items.
 
 DATABASE CONTEXT (JSON):
 ${JSON.stringify(marketplaceContext)}
@@ -190,7 +202,7 @@ ${message}`;
           ],
           generationConfig: {
             temperature: 0.35,
-            maxOutputTokens: 500,
+            maxOutputTokens: 900,
           },
         }),
       },

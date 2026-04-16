@@ -26,6 +26,7 @@ interface ProfileSummary {
 
 interface ListingSummary {
   title: string;
+  description?: string;
   price: number;
   category: string;
   condition: string;
@@ -38,17 +39,389 @@ interface CartSummary {
   quantity: number;
 }
 
+interface CartListingSummary {
+  title: string;
+  price: number;
+  category: string;
+  condition: string;
+  location: string;
+  status: string;
+}
+
+interface CartWithListingSummary {
+  quantity: number;
+  listings: CartListingSummary | null;
+}
+
 interface OrderSummary {
+  id: string;
   total_amount: number;
   status: string;
+  payment_method?: string;
   created_at: string;
 }
+
+interface OrderItemListingSummary {
+  title: string;
+  category: string;
+  condition: string;
+  location: string;
+}
+
+interface OrderItemSummary {
+  order_id: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  listings: OrderItemListingSummary | null;
+}
+
+const MIN_LOADER_MS = 850;
 
 const LEGACY_REPLY_SIGNATURE =
   "That's a great question! I'm here to help with CampusKart features";
 
 const isLegacyCloudReply = (reply: string) =>
   reply.includes(LEGACY_REPLY_SIGNATURE);
+
+const isListingDetailsIntent = (message: string) => {
+  const lower = message.toLowerCase();
+  const hasListingWord =
+    lower.includes('listed') ||
+    lower.includes('listing') ||
+    lower.includes('items') ||
+    lower.includes('products');
+
+  const hasDetailsWord =
+    lower.includes('detail') ||
+    lower.includes('all') ||
+    lower.includes('complete') ||
+    lower.includes('everything') ||
+    lower.includes('what items');
+
+  return hasListingWord && hasDetailsWord;
+};
+
+const isCartDetailsIntent = (message: string) => {
+  const lower = message.toLowerCase();
+  const hasCartWord =
+    lower.includes('cart') ||
+    lower.includes('in my cart') ||
+    lower.includes('my cart');
+
+  const hasDetailsWord =
+    lower.includes('detail') ||
+    lower.includes('all') ||
+    lower.includes('what') ||
+    lower.includes('show') ||
+    lower.includes('items');
+
+  return hasCartWord && hasDetailsWord;
+};
+
+const isOrderDetailsIntent = (message: string) => {
+  const lower = message.toLowerCase();
+  const hasOrderWord =
+    lower.includes('order') ||
+    lower.includes('orders') ||
+    lower.includes('history') ||
+    lower.includes('purchases');
+
+  const hasDetailsWord =
+    lower.includes('detail') ||
+    lower.includes('all') ||
+    lower.includes('what') ||
+    lower.includes('show') ||
+    lower.includes('recent');
+
+  return hasOrderWord && hasDetailsWord;
+};
+
+const isProfileDetailsIntent = (message: string) => {
+  const lower = message.toLowerCase();
+  const hasProfileWord =
+    lower.includes('profile') ||
+    lower.includes('account') ||
+    lower.includes('my info') ||
+    lower.includes('my details');
+
+  const hasDetailsWord =
+    lower.includes('detail') ||
+    lower.includes('show') ||
+    lower.includes('summary') ||
+    lower.includes('info') ||
+    lower.includes('data');
+
+  return hasProfileWord && hasDetailsWord;
+};
+
+const formatPrice = (value: number) => {
+  if (!Number.isFinite(value)) return 'N/A';
+  return `INR ${value}`;
+};
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+async function getCurrentUserId() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    throw new Error('User is not signed in');
+  }
+
+  return user.id;
+}
+
+async function getFullListingsReply() {
+  const { data, error } = await supabase
+    .from('listings')
+    .select('title, description, price, category, condition, location, status, created_at')
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  if (error) {
+    throw new Error(`Unable to load listings: ${error.message}`);
+  }
+
+  const listings = (data as ListingSummary[] | null) ?? [];
+
+  if (listings.length === 0) {
+    return 'There are currently no active listings on CampusKart.';
+  }
+
+  const lines: string[] = [
+    `Great question. I found ${listings.length} active listing${listings.length === 1 ? '' : 's'} on CampusKart.`,
+    'Here are the complete details:',
+    '',
+  ];
+
+  listings.forEach((item, index) => {
+    lines.push(`${index + 1}) ${item.title}`);
+    lines.push(`   - Price: ${formatPrice(item.price)}`);
+    lines.push(`   - Category: ${item.category}`);
+    lines.push(`   - Condition: ${item.condition}`);
+    lines.push(`   - Location: ${item.location}`);
+    if (item.description && item.description.trim()) {
+      lines.push(`   - Description: ${item.description.trim()}`);
+    }
+    lines.push('');
+  });
+
+  lines.push('That is the full set of active listings currently visible on the platform.');
+  lines.push('If you want, I can also group these by category or suggest top picks by budget.');
+
+  return lines.join('\n').trim();
+}
+
+async function getFullCartReply() {
+  const userId = await getCurrentUserId();
+
+  const { data, error } = await supabase
+    .from('carts')
+    .select(
+      'quantity, listings(title, price, category, condition, location, status)'
+    )
+    .eq('user_id', userId);
+
+  if (error) {
+    throw new Error(`Unable to load cart items: ${error.message}`);
+  }
+
+  const cartItems = (data as CartWithListingSummary[] | null) ?? [];
+
+  if (cartItems.length === 0) {
+    return 'Your cart is currently empty. Add items from the search page and I can summarize them here.';
+  }
+
+  let grandTotal = 0;
+  const lines: string[] = [
+    `You currently have ${cartItems.length} cart line item${cartItems.length === 1 ? '' : 's'}.`,
+    'Here is the complete cart summary:',
+    '',
+  ];
+
+  cartItems.forEach((item, index) => {
+    const listing = item.listings;
+    if (!listing) return;
+
+    const lineTotal = listing.price * item.quantity;
+    grandTotal += lineTotal;
+
+    lines.push(`${index + 1}) ${listing.title}`);
+    lines.push(`   - Quantity: ${item.quantity}`);
+    lines.push(`   - Unit Price: ${formatPrice(listing.price)}`);
+    lines.push(`   - Line Total: ${formatPrice(lineTotal)}`);
+    lines.push(`   - Category: ${listing.category}`);
+    lines.push(`   - Condition: ${listing.condition}`);
+    lines.push(`   - Location: ${listing.location}`);
+    lines.push('');
+  });
+
+  lines.push(`Estimated cart total: ${formatPrice(grandTotal)}`);
+  lines.push('I can also suggest the best value items in your cart if you want.');
+
+  return lines.join('\n').trim();
+}
+
+async function getFullOrdersReply() {
+  const userId = await getCurrentUserId();
+
+  const { data: ordersData, error: ordersError } = await supabase
+    .from('orders')
+    .select('id, total_amount, status, payment_method, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(12);
+
+  if (ordersError) {
+    throw new Error(`Unable to load orders: ${ordersError.message}`);
+  }
+
+  const orders = (ordersData as OrderSummary[] | null) ?? [];
+
+  if (orders.length === 0) {
+    return 'You do not have any orders yet.';
+  }
+
+  const orderIds = orders.map((order) => order.id);
+  const { data: orderItemsData, error: orderItemsError } = await supabase
+    .from('order_items')
+    .select(
+      'order_id, quantity, unit_price, total_price, listings(title, category, condition, location)'
+    )
+    .in('order_id', orderIds);
+
+  if (orderItemsError) {
+    throw new Error(`Unable to load order items: ${orderItemsError.message}`);
+  }
+
+  const orderItems = (orderItemsData as OrderItemSummary[] | null) ?? [];
+  const itemsByOrder = new Map<string, OrderItemSummary[]>();
+
+  orderItems.forEach((item) => {
+    const existing = itemsByOrder.get(item.order_id) ?? [];
+    existing.push(item);
+    itemsByOrder.set(item.order_id, existing);
+  });
+
+  const lines: string[] = [
+    `You have ${orders.length} recent order${orders.length === 1 ? '' : 's'}.`,
+    'Here is your detailed order history:',
+    '',
+  ];
+
+  orders.forEach((order, index) => {
+    const items = itemsByOrder.get(order.id) ?? [];
+
+    lines.push(`${index + 1}) Order ${order.id.slice(0, 8)} (${order.status})`);
+    lines.push(`   - Date: ${new Date(order.created_at).toLocaleString()}`);
+    lines.push(`   - Payment Method: ${order.payment_method ?? 'N/A'}`);
+    lines.push(`   - Total Amount: ${formatPrice(order.total_amount)}`);
+
+    if (items.length > 0) {
+      lines.push('   - Items:');
+      items.forEach((item, itemIndex) => {
+        const listing = item.listings;
+        if (!listing) return;
+        lines.push(`     ${itemIndex + 1}. ${listing.title}`);
+        lines.push(`        Quantity: ${item.quantity}`);
+        lines.push(`        Unit Price: ${formatPrice(item.unit_price)}`);
+        lines.push(`        Line Total: ${formatPrice(item.total_price)}`);
+        lines.push(`        Category: ${listing.category}`);
+      });
+    }
+
+    lines.push('');
+  });
+
+  lines.push('That is your full recent order breakdown.');
+
+  return lines.join('\n').trim();
+}
+
+async function getFullProfileReply() {
+  const userId = await getCurrentUserId();
+
+  const [profileResult, listingsCountResult, activeListingsCountResult, ordersCountResult] =
+    await Promise.all([
+      supabase
+        .from('profiles')
+        .select('full_name, location, phone, created_at')
+        .eq('id', userId)
+        .maybeSingle(),
+      supabase
+        .from('listings')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId),
+      supabase
+        .from('listings')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('status', 'active'),
+      supabase
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId),
+    ]);
+
+  if (profileResult.error) {
+    throw new Error(`Unable to load profile: ${profileResult.error.message}`);
+  }
+
+  const profile = profileResult.data as
+    | {
+        full_name: string | null;
+        location: string | null;
+        phone: string | null;
+        created_at: string;
+      }
+    | null;
+
+  if (!profile) {
+    return 'Your profile was not found. Please update your profile details from the Profile page.';
+  }
+
+  const lines: string[] = [
+    'Here is your profile summary:',
+    '',
+    `1) Name: ${profile.full_name ?? 'N/A'}`,
+    `   - Location: ${profile.location ?? 'N/A'}`,
+    `   - Phone: ${profile.phone ?? 'Not added'}`,
+    `   - Member Since: ${new Date(profile.created_at).toLocaleDateString()}`,
+    '',
+    '2) Marketplace Activity',
+    `   - Total Listings Posted: ${listingsCountResult.count ?? 0}`,
+    `   - Active Listings: ${activeListingsCountResult.count ?? 0}`,
+    `   - Total Orders: ${ordersCountResult.count ?? 0}`,
+    '',
+    'If you want, I can also show your active listings next.',
+  ];
+
+  return lines.join('\n').trim();
+}
+
+const normalizeAssistantReply = (rawReply: string) => {
+  let text = rawReply.replace(/\r\n/g, '\n').trim();
+
+  // Remove markdown artifacts so the chat UI always shows clean plain text.
+  text = text.replace(/```[\s\S]*?```/g, '').trim();
+  text = text.replace(/^\s*[*-]\s+/gm, '- ');
+  text = text.replace(/\*\*(.*?)\*\*/g, '$1');
+  text = text.replace(/\*(.*?)\*/g, '$1');
+  text = text.replace(/`([^`]+)`/g, '$1');
+
+  // Convert inline bullet artifacts like " * Price:" into readable lines.
+  text = text.replace(/\s\*\s+/g, '\n- ');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  return text;
+};
 
 async function getMarketplaceContextForPrompt() {
   const {
@@ -134,6 +507,18 @@ async function getGeminiReplyFromBrowser(
 Use the database context below to answer accurately.
 If user asks for data that is not in the context, say you do not have enough data.
 Keep responses concise, practical, and student-friendly.
+Output must be plain text only.
+Do not use markdown formatting symbols like **, *, _, #, or backticks.
+If listing items, use simple numbered or hyphen lists in plain text.
+Always complete your answer and end with a full sentence.
+When the user asks for item/listing details, use this style:
+1) Item title
+  - Price: ...
+  - Category: ...
+  - Condition: ...
+  - Location: ...
+  - Description: ... (if available)
+Include every available item from context when user asks for all items.
 
 DATABASE CONTEXT (JSON):
 ${JSON.stringify(marketplaceContext)}
@@ -156,7 +541,7 @@ ${message}`;
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.35,
-          maxOutputTokens: 500,
+          maxOutputTokens: 900,
         },
       }),
     }
@@ -177,7 +562,7 @@ ${message}`;
     throw new Error('Gemini returned an empty response.');
   }
 
-  return reply;
+  return normalizeAssistantReply(reply);
 }
 
 export function ChatbotSidebar() {
@@ -218,6 +603,75 @@ export function ChatbotSidebar() {
     setInputValue('');
     setLoading(true);
 
+    const loadingStartedAt = Date.now();
+    const waitForMinimumLoader = async () => {
+      const elapsed = Date.now() - loadingStartedAt;
+      const remaining = MIN_LOADER_MS - elapsed;
+      if (remaining > 0) {
+        await sleep(remaining);
+      }
+    };
+
+    try {
+      if (isListingDetailsIntent(userMessage.content)) {
+        const fullListingsReply = await getFullListingsReply();
+        await waitForMinimumLoader();
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: fullListingsReply,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+        setLoading(false);
+        return;
+      }
+
+      if (isCartDetailsIntent(userMessage.content)) {
+        const fullCartReply = await getFullCartReply();
+        await waitForMinimumLoader();
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: fullCartReply,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+        setLoading(false);
+        return;
+      }
+
+      if (isOrderDetailsIntent(userMessage.content)) {
+        const fullOrdersReply = await getFullOrdersReply();
+        await waitForMinimumLoader();
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: fullOrdersReply,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+        setLoading(false);
+        return;
+      }
+
+      if (isProfileDetailsIntent(userMessage.content)) {
+        const fullProfileReply = await getFullProfileReply();
+        await waitForMinimumLoader();
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: 'assistant',
+          content: fullProfileReply,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+        setLoading(false);
+        return;
+      }
+    } catch (listingError) {
+      console.error('Listing details helper error:', listingError);
+    }
+
     const history = [...messages, userMessage]
       .slice(-8)
       .map((message) => ({
@@ -239,7 +693,7 @@ export function ChatbotSidebar() {
         throw error;
       }
 
-      assistantReply = data?.reply?.trim() ?? '';
+      assistantReply = normalizeAssistantReply(data?.reply?.trim() ?? '');
 
       if (!assistantReply || isLegacyCloudReply(assistantReply)) {
         assistantReply = await getGeminiReplyFromBrowser(userMessage.content, history);
@@ -265,7 +719,7 @@ export function ChatbotSidebar() {
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           type: 'assistant',
-          content: fallbackReply,
+          content: normalizeAssistantReply(fallbackReply),
           timestamp: new Date(),
         };
 
@@ -284,6 +738,7 @@ export function ChatbotSidebar() {
         setMessages((prev) => [...prev, errorMessage]);
       }
     } finally {
+      await waitForMinimumLoader();
       setLoading(false);
     }
   };
